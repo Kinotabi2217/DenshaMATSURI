@@ -1394,29 +1394,55 @@ function formatTime(timeStr) {
 
 function parseOuDia(text) {
     const lines = text.split(/\r?\n/);
-    let stations = [], trains = [], syubetsuList = [], block = "", curT = null, curS = null;
+    let stations = [], trains = [], syubetsuList = [];
+    let curEki = null, curTrack = null, curT = null, curS = null;
     let currentDirection = 'Kudari';
+    let blockStack = [];
     
     for(let line of lines) {
-        if(line === 'Eki.') { block = 'Eki'; continue; }
-        if(line === 'Ressyasyubetsu.') { block = 'Syubetsu'; curS = { name: '', color: '#000000' }; continue; }
+        if(line === 'EkiTrack2Cont.') continue;
+        if(line === 'Eki.') { 
+            blockStack.push('Eki'); 
+            curEki = { name: '', tracks: [], downMain: 0, upMain: 0 }; 
+            stations.push(curEki); 
+            continue; 
+        }
+        if(line === 'EkiTrack2.') { 
+            blockStack.push('EkiTrack2'); 
+            curTrack = { name: '', ryakusyou: '' }; 
+            curEki.tracks.push(curTrack); 
+            continue; 
+        }
+        if(line === 'Ressyasyubetsu.') { 
+            blockStack.push('Syubetsu'); 
+            curS = { name: '', color: '#000000' }; 
+            syubetsuList.push(curS); 
+            continue; 
+        }
         if(line === 'Kudari.') { currentDirection = 'Kudari'; continue; }
         if(line === 'Nobori.') { currentDirection = 'Nobori'; continue; }
         
         if(line === 'Ressya.') { 
-            block = 'Ressya'; 
+            blockStack.push('Ressya'); 
             curT = { sdMap: {}, number: '-', yukisaki: '', houkou: currentDirection, syubetsuIdx: 0 }; 
+            trains.push(curT);
             continue; 
         }
         if(line === '.') { 
-            if(block === 'Ressya' && curT) trains.push(curT);
-            else if(block === 'Syubetsu' && curS) syubetsuList.push(curS);
-            block = ""; 
+            blockStack.pop(); 
             continue; 
         }
 
-        if(block === 'Eki' && line.startsWith('Ekimei=')) {
-            stations.push({name: line.split('=')[1]});
+        const block = blockStack.length > 0 ? blockStack[blockStack.length - 1] : "";
+
+        if(block === 'Eki') {
+            if(line.startsWith('Ekimei=')) curEki.name = line.split('=')[1];
+            else if(line.startsWith('DownMain=')) curEki.downMain = parseInt(line.split('=')[1], 10) || 0;
+            else if(line.startsWith('UpMain=')) curEki.upMain = parseInt(line.split('=')[1], 10) || 0;
+        }
+        else if(block === 'EkiTrack2') {
+            if(line.startsWith('TrackName=')) curTrack.name = line.split('=')[1];
+            else if(line.startsWith('TrackRyakusyou=')) curTrack.ryakusyou = line.split('=')[1];
         }
         else if(block === 'Syubetsu') {
             if(line.startsWith('Syubetsumei=')) {
@@ -1446,12 +1472,12 @@ function parseOuDia(text) {
                         const timeData = parts[1];
                         if (timeData) {
                             const timeStr = timeData.split('$')[0];
-                            const track = timeData.split('$')[1] || '';
+                            const trackIdx = timeData.split('$')[1] || '';
                             const formattedTime = formatTime(timeStr);
                             if (formattedTime) {
                                 // 上りの場合は駅のインデックスを反転させる
                                 const stationIdx = (curT.houkou === 'Nobori') ? (stations.length - 1 - i) : i;
-                                curT.sdMap[stationIdx] = { hatsu: formattedTime, track: track };
+                                curT.sdMap[stationIdx] = { hatsu: formattedTime, trackIdx: trackIdx };
                             }
                         }
                     }
@@ -1500,15 +1526,25 @@ function renderTable(direction, bodyId, countId) {
         const sd = t.sdMap[idx];
         if(!sd) return;
         
-        const syubetsu = data.syubetsuList[t.syubetsuIdx] || { name: '普通', color: '#000000' };
+        let trackName = '-';
+        const st = data.stations[idx];
+        if (st && sd.trackIdx !== '') {
+            const trackCode = parseInt(sd.trackIdx, 10);
+            if (!isNaN(trackCode) && st.tracks && st.tracks[trackCode]) {
+                trackName = st.tracks[trackCode].ryakusyou || st.tracks[trackCode].name;
+            } else {
+                trackName = sd.trackIdx;
+            }
+        }
         
+        const syubetsu = data.syubetsuList[t.syubetsuIdx] || { name: '普通', color: '#000000' };
         events.push({ 
             time: sd.hatsu, 
             number: t.number, 
-            syubetsuName: syubetsu.name,
-            syubetsuColor: syubetsu.color,
+            syubetsuName: syubetsu.name, 
+            syubetsuColor: syubetsu.color, 
             terminal: t.terminal, 
-            track: sd.track 
+            track: trackName 
         });
     });
     
