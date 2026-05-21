@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>芝電電車まつりダイヤ Webビューア</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
@@ -17,10 +17,30 @@
     .row-checked td { opacity: 0.5; background-color: #f1f5f9 !important; text-decoration: line-through; }
     input[type="checkbox"] { width: 1.25rem; height: 1.25rem; cursor: pointer; accent-color: #2563eb; }
     
-    /* ダイヤグラム用 */
-    .diagram-container { overflow: hidden; height: calc(100vh - 300px); border: 1px solid #e2e8f0; border-radius: 0.5rem; background-color: #fff; position: relative; }
-    #diagram-canvas { cursor: grab; display: block; width: 100%; height: 100%; }
+    /* ダイヤグラム用 (touch-action: noneを追加してスマホのブラウザスクロールを防止) */
+    .diagram-container { overflow: hidden; height: calc(100vh - 300px); min-height: 400px; border: 1px solid #e2e8f0; border-radius: 0.5rem; background-color: #fff; position: relative; }
+    #diagram-canvas { cursor: grab; display: block; width: 100%; height: 100%; touch-action: none; }
     #diagram-canvas:active { cursor: grabbing; }
+
+    /* 全画面モード用 */
+    #view-diagram.fullscreen-mode {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 9999;
+        background-color: #f1f5f9;
+        padding: 0.5rem;
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+    }
+    #view-diagram.fullscreen-mode .diagram-container {
+        height: auto;
+        flex-grow: 1;
+        min-height: 0;
+    }
 </style>
 </head>
 <body class="bg-slate-100 p-2 md:p-4 text-slate-800">
@@ -129,6 +149,7 @@
                     <button id="diag-y-inc" class="px-2 py-0.5 bg-white border border-slate-300 rounded hover:bg-slate-100 active:bg-slate-200 text-slate-700 text-xs font-bold">拡大</button>
                 </div>
                 <button id="diag-reset" class="px-3 py-1 bg-slate-700 border border-slate-800 rounded hover:bg-slate-600 active:bg-slate-800 text-white text-xs font-medium ml-auto">初期位置に戻す</button>
+                <button id="diag-fullscreen" class="px-3 py-1 bg-blue-600 border border-blue-700 rounded hover:bg-blue-500 active:bg-blue-700 text-white text-xs font-medium shadow-sm transition-transform active:scale-95">全画面表示</button>
             </div>
             <div class="diagram-container shadow-sm" id="diagram-container">
                 <canvas id="diagram-canvas"></canvas>
@@ -1421,6 +1442,23 @@ tabDiagram.onclick = () => {
     renderDiagram();
 };
 
+// 全画面切り替え処理
+document.getElementById('diag-fullscreen').onclick = () => {
+    const btn = document.getElementById('diag-fullscreen');
+    viewDiagram.classList.toggle('fullscreen-mode');
+    
+    if (viewDiagram.classList.contains('fullscreen-mode')) {
+        btn.textContent = '元に戻す';
+        document.body.style.overflow = 'hidden'; // 背景スクロールの防止
+    } else {
+        btn.textContent = '全画面表示';
+        document.body.style.overflow = '';
+    }
+    
+    // レイアウト変更完了後にCanvasを再リサイズ・描画
+    setTimeout(renderDiagram, 10);
+};
+
 // ページ読み込み時に初期データを表示
 window.addEventListener('DOMContentLoaded', () => {
     try {
@@ -1472,15 +1510,12 @@ document.getElementById('fileInput').onchange = e => {
 
 function formatTime(timeStr) {
     if (!timeStr) return '';
-    
     let targetStr = timeStr;
     if (timeStr.includes('/')) {
         const parts = timeStr.split('/');
         targetStr = parts[1] || parts[0];
     }
-    
     if (targetStr.includes(':')) return targetStr;
-    
     if (!/^\d+$/.test(targetStr)) return targetStr;
     
     let h = '00', m = '00', s = '00';
@@ -1501,7 +1536,6 @@ function formatTime(timeStr) {
     } else {
         return targetStr;
     }
-    
     return s === '00' ? `${h}:${m}` : `${h}:${m}:${s}`;
 }
 
@@ -1627,7 +1661,6 @@ function parseOuDia(text) {
                 terminalName = t.yukisaki; 
             }
         }
-        
         if (!terminalName) {
             const indices = Object.keys(t.sdMap).map(Number).sort((a, b) => a - b);
             if (indices.length > 0) {
@@ -1639,6 +1672,9 @@ function parseOuDia(text) {
         }
         t.terminal = terminalName || '不明';
     });
+
+    // 幽霊列車除外
+    trains = trains.filter(t => Object.keys(t.sdMap).length >= 2);
 
     return { stations, trains, syubetsuList, kudariAlias, noboriAlias };
 }
@@ -1715,7 +1751,6 @@ function renderAll() {
 
 // === ダイヤグラム描画と操作処理 ===
 
-// ダイヤの拡大縮小ボタン設定
 function zoomDiag(axis, factor) {
     const canvas = document.getElementById('diagram-canvas');
     const rect = canvas.getBoundingClientRect();
@@ -1796,7 +1831,6 @@ function renderDiagram() {
     const endHour = Math.ceil(maxTime / 60);
     const totalMinutes = (endHour - startHour) * 60;
     
-    // 論理スケールに合わせた描画座標の係数
     const pxPerMinute = 8 * diagScaleX; 
     const stationHeight = 80 * diagScaleY; 
     
@@ -1815,6 +1849,7 @@ function renderDiagram() {
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
     
+    // 背景を白でクリア
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, rect.width, rect.height);
     
@@ -1826,71 +1861,66 @@ function renderDiagram() {
         diagNeedsInit = false;
     }
 
+    // ==========================================
+    // 1. スクロール領域（グリッド線と列車線）の描画
+    // ==========================================
     ctx.save();
+    
+    // 駅名や時刻領域に線がはみ出さないようにクリッピング（表示枠を設定）
+    ctx.beginPath();
+    const clipW = rect.width - paddingLeft;
+    const clipH = rect.height - paddingTop - paddingBottom;
+    ctx.rect(paddingLeft, paddingTop, clipW > 0 ? clipW : 0, clipH > 0 ? clipH : 0);
+    ctx.clip();
+    
+    // スクロール量の適用
     ctx.translate(diagOffsetX, diagOffsetY);
     
-    // --- 罫線の描画 ---
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
-    
-    // 描画最適化のためのカリング範囲
     const viewLeft = -diagOffsetX;
     const viewRight = -diagOffsetX + rect.width;
     const viewTop = -diagOffsetY;
     const viewBottom = -diagOffsetY + rect.height;
     
+    // 縦線（時間線）
     for (let m = 0; m <= totalMinutes; m++) {
         const x = paddingLeft + m * pxPerMinute;
-        
         if (x < viewLeft - 50 || x > viewRight + 50) continue;
         
+        // 拡大倍率に応じた線の引き分け
         if (m % 60 === 0) {
-            ctx.strokeStyle = '#94a3b8';
-            ctx.lineWidth = 1;
-            const h = (startHour + m / 60) % 24;
-            ctx.fillStyle = '#334155';
-            ctx.font = "bold 13px sans-serif";
-            
-            ctx.fillText(`${h}:00`, x, paddingTop - 10);
-            ctx.fillText(`${h}:00`, x, diagHeight - paddingBottom + 25); 
+            ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.2;
         } else if (m % 10 === 0) {
-            ctx.strokeStyle = '#cbd5e1'; 
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1;
         } else if (m % 2 === 0) {
-            ctx.strokeStyle = '#e2e8f0'; 
-            ctx.lineWidth = 0.5;
+            ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 0.5;
+        } else if (diagScaleX >= 3.0) {
+            // 拡大時は1分間隔の線も描画する
+            ctx.strokeStyle = '#f1f5f9'; ctx.lineWidth = 0.5;
         } else {
             continue;
         }
         
         ctx.beginPath();
-        ctx.moveTo(x, paddingTop);
-        ctx.lineTo(x, diagHeight - paddingBottom);
+        // クリッピングされるため、上下にはみ出すように長く引いておく
+        ctx.moveTo(x, paddingTop - 1000);
+        ctx.lineTo(x, diagHeight + 1000);
         ctx.stroke();
     }
     
-    // 横線（駅）
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = '#1e293b';
-    ctx.font = "bold 13px sans-serif";
-    
+    // 横線（駅線）
     for (let i = 0; i < data.stations.length; i++) {
         const y = paddingTop + i * stationHeight;
-        
         if (y < viewTop - 50 || y > viewBottom + 50) continue;
         
         ctx.strokeStyle = '#94a3b8';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(paddingLeft, y);
-        ctx.lineTo(diagWidth - paddingRight, y);
+        ctx.moveTo(paddingLeft - 1000, y);
+        ctx.lineTo(diagWidth + 1000, y);
         ctx.stroke();
-        
-        ctx.fillText(data.stations[i].name, paddingLeft - 10, y);
     }
     
-    // --- 列車の線の描画 ---
+    // 列車の線
     allTrainPoints.forEach(tp => {
         const t = tp.train;
         const pts = tp.points;
@@ -1898,10 +1928,9 @@ function renderDiagram() {
         
         const syubetsu = data.syubetsuList[t.syubetsuIdx];
         ctx.strokeStyle = syubetsu ? syubetsu.color : '#000000';
-        ctx.lineWidth = 2; // 線幅は固定で綺麗に表示
+        ctx.lineWidth = 2;
         
         ctx.beginPath();
-        
         for (let i = 0; i < pts.length; i++) {
             const p = pts[i];
             const y = paddingTop + p.stationIdx * stationHeight;
@@ -1909,22 +1938,13 @@ function renderDiagram() {
             if (p.chaku !== null && p.hatsu !== null && p.chaku !== p.hatsu) {
                 const xChaku = paddingLeft + (p.chaku - startHour * 60) * pxPerMinute;
                 const xHatsu = paddingLeft + (p.hatsu - startHour * 60) * pxPerMinute;
-                
-                if (i === 0) {
-                    ctx.moveTo(xHatsu, y);
-                } else {
-                    ctx.lineTo(xChaku, y);
-                    ctx.lineTo(xHatsu, y);
-                }
+                if (i === 0) ctx.moveTo(xHatsu, y);
+                else { ctx.lineTo(xChaku, y); ctx.lineTo(xHatsu, y); }
             } else {
                 const tVal = p.hatsu !== null ? p.hatsu : p.chaku;
                 const x = paddingLeft + (tVal - startHour * 60) * pxPerMinute;
-                
-                if (i === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
-                }
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
             }
         }
         ctx.stroke();
@@ -1935,12 +1955,11 @@ function renderDiagram() {
             const pLast = pts[pts.length - 1]; 
             
             ctx.fillStyle = ctx.strokeStyle;
-            ctx.font = "bold 11px sans-serif"; // フォントサイズも固定
+            ctx.font = "bold 11px sans-serif";
             
             const x0 = paddingLeft + ((p0.hatsu !== null ? p0.hatsu : p0.chaku) - startHour * 60) * pxPerMinute;
             const y0 = paddingTop + p0.stationIdx * stationHeight;
             
-            // 画面外描画の最適化
             if (x0 > viewLeft - 50 && x0 < viewRight + 50 && y0 > viewTop - 50 && y0 < viewBottom + 50) {
                 ctx.textAlign = "center";
                 ctx.textBaseline = t.houkou === 'Kudari' ? "bottom" : "top";
@@ -1959,13 +1978,78 @@ function renderDiagram() {
         }
     });
     
-    ctx.restore();
+    // スクロールやクリッピング状態をリセット
+    ctx.restore(); 
+    
+    // ==========================================
+    // 2. 固定領域（軸ラベル等）の描画
+    // ==========================================
+    
+    // グラフの枠線を描画
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(paddingLeft, paddingTop, clipW > 0 ? clipW : 0, clipH > 0 ? clipH : 0);
+    
+    // 固定表示の駅名（左側）
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = '#1e293b';
+    ctx.font = "bold 13px sans-serif";
+    for (let i = 0; i < data.stations.length; i++) {
+        const y = paddingTop + i * stationHeight + diagOffsetY;
+        if (y < paddingTop - 10 || y > rect.height - paddingBottom + 10) continue;
+        ctx.fillText(data.stations[i].name, paddingLeft - 10, y);
+    }
+    
+    // 倍率に応じた時刻ラベルの表示間隔を決定 (デフォルトは60分)
+    let labelInterval = 60;
+    if (diagScaleX >= 5.0) labelInterval = 1;      // 極大ズーム：1分おき
+    else if (diagScaleX >= 2.5) labelInterval = 2; // 大ズーム：2分おき
+    else if (diagScaleX >= 1.5) labelInterval = 5; // 中ズーム：5分おき
+    else if (diagScaleX >= 0.8) labelInterval = 10; // 標準ズーム：10分おき
+    else if (diagScaleX >= 0.4) labelInterval = 30; // 縮小：30分おき
+    
+    // 固定表示の時刻ラベル（上部と下部）
+    ctx.textAlign = "center";
+    for (let m = 0; m <= totalMinutes; m += labelInterval) {
+        // X座標にスクロール量(diagOffsetX)を足す
+        const x = paddingLeft + m * pxPerMinute + diagOffsetX;
+        
+        // グラフ領域外（左右）にはみ出た文字は非表示にする
+        if (x < paddingLeft - 20 || x > rect.width + 20) continue;
+        
+        // 実際の時刻(時・分)を計算
+        const absoluteMinutes = startHour * 60 + m;
+        const h = Math.floor(absoluteMinutes / 60) % 24;
+        const min = absoluteMinutes % 60;
+        
+        let timeStr = `${h}:${String(min).padStart(2, '0')}`;
+        
+        if (m % 60 === 0) {
+            ctx.fillStyle = '#1e293b';
+            ctx.font = "bold 13px sans-serif";
+            timeStr = `${h}:00`; // 0分はシンプルに表記
+        } else {
+            ctx.fillStyle = '#64748b';
+            ctx.font = "bold 11px sans-serif";
+        }
+        
+        // 上部の時刻
+        ctx.textBaseline = "bottom";
+        ctx.fillText(timeStr, x, paddingTop - 5);
+        
+        // 下部の時刻
+        ctx.textBaseline = "top";
+        ctx.fillText(timeStr, x, rect.height - paddingBottom + 5);
+    }
 }
 
-// ズーム・パン(スクロール)機能のイベントリスナー
+// === マウス・タッチ操作イベント ===
+
 const dContainer = document.getElementById('diagram-container');
 const dCanvas = document.getElementById('diagram-canvas');
 
+// PC用マウスホイールズーム
 dContainer.addEventListener('wheel', (e) => {
     if(document.getElementById('view-diagram').classList.contains('hidden')) return;
     e.preventDefault();
@@ -1975,17 +2059,14 @@ dContainer.addEventListener('wheel', (e) => {
     const mouseY = e.clientY - rect.top;
 
     const zoomSensitivity = 0.001;
-    // 拡大縮小の係数
     let factor = 1 - (e.deltaY * zoomSensitivity);
     factor = Math.max(0.8, Math.min(factor, 1.2));
     
-    // スケールの制限
     if (diagScaleX * factor < 0.1) factor = 0.1 / diagScaleX;
     if (diagScaleX * factor > 10.0) factor = 10.0 / diagScaleX;
     if (diagScaleY * factor < 0.1) factor = 0.1 / diagScaleY;
     if (diagScaleY * factor > 10.0) factor = 10.0 / diagScaleY;
 
-    // マウスカーソルの位置を中心にズームする計算
     diagOffsetX = mouseX - (mouseX - diagOffsetX) * factor;
     diagOffsetY = mouseY - (mouseY - diagOffsetY) * factor;
     
@@ -1995,13 +2076,13 @@ dContainer.addEventListener('wheel', (e) => {
     renderDiagram();
 }, { passive: false });
 
+// PC用マウスドラッグスクロール
 dContainer.addEventListener('mousedown', (e) => {
     if(document.getElementById('view-diagram').classList.contains('hidden')) return;
     isDiagDragging = true;
     diagDragStartX = e.clientX;
     diagDragStartY = e.clientY;
 });
-
 window.addEventListener('mousemove', (e) => {
     if (!isDiagDragging) return;
     const dx = e.clientX - diagDragStartX;
@@ -2012,43 +2093,91 @@ window.addEventListener('mousemove', (e) => {
     diagDragStartY = e.clientY;
     renderDiagram();
 });
-
-window.addEventListener('mouseup', () => {
-    isDiagDragging = false;
-    
+window.addEventListener('mouseup', () => { isDiagDragging = false; });
+window.addEventListener('resize', () => {
+    if(!document.getElementById('view-diagram').classList.contains('hidden')) renderDiagram();
 });
-// --- ここから追加 ---
-let isTouchDragging = false;
-let lastTouchX = 0;
-let lastTouchY = 0;
 
+// スマホ用タッチ操作変数
+let initialPinchDistance = null;
+let initialScaleX = 1.0;
+let initialScaleY = 1.0;
+
+// スマホ用タッチ開始（スワイプ＆ピンチ操作）
 dCanvas.addEventListener('touchstart', (e) => {
+    if(document.getElementById('view-diagram').classList.contains('hidden')) return;
+    e.preventDefault(); 
+    
     if (e.touches.length === 1) {
-        isTouchDragging = true;
-        lastTouchX = e.touches[0].clientX;
-        lastTouchY = e.touches[0].clientY;
+        // 1本指はドラッグ
+        isDiagDragging = true;
+        diagDragStartX = e.touches[0].clientX;
+        diagDragStartY = e.touches[0].clientY;
+    } else if (e.touches.length === 2) {
+        // 2本指はピンチズーム開始
+        isDiagDragging = false;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+        initialScaleX = diagScaleX;
+        initialScaleY = diagScaleY;
     }
-}, { passive: true });
-
-window.addEventListener('touchmove', (e) => {
-    if (!isTouchDragging || e.touches.length !== 1) return;
-    if (e.cancelable) e.preventDefault(); 
-    const dx = e.touches[0].clientX - lastTouchX;
-    const dy = e.touches[0].clientY - lastTouchY;
-    diagOffsetX += dx;
-    diagOffsetY += dy;
-    lastTouchX = e.touches[0].clientX;
-    lastTouchY = e.touches[0].clientY;
-    renderDiagram();
 }, { passive: false });
 
-window.addEventListener('touchend', () => {
-    isTouchDragging = false;
-});
-// --- ここまで追加 ---
-window.addEventListener('resize', () => {
-    if(!document.getElementById('view-diagram').classList.contains('hidden')) {
+// スマホ用タッチ移動
+dCanvas.addEventListener('touchmove', (e) => {
+    if(document.getElementById('view-diagram').classList.contains('hidden')) return;
+    e.preventDefault();
+    
+    if (isDiagDragging && e.touches.length === 1) {
+        // スワイプによるスクロール
+        const dx = e.touches[0].clientX - diagDragStartX;
+        const dy = e.touches[0].clientY - diagDragStartY;
+        diagOffsetX += dx;
+        diagOffsetY += dy;
+        diagDragStartX = e.touches[0].clientX;
+        diagDragStartY = e.touches[0].clientY;
         renderDiagram();
+    } else if (e.touches.length === 2 && initialPinchDistance) {
+        // ピンチズーム
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const factor = distance / initialPinchDistance;
+        
+        // 2本指の中心座標を取得してズームの中心にする
+        const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const rect = dCanvas.getBoundingClientRect();
+        const mouseX = centerX - rect.left;
+        const mouseY = centerY - rect.top;
+
+        let nextScaleX = initialScaleX * factor;
+        nextScaleX = Math.max(0.1, Math.min(nextScaleX, 10.0));
+        let actualFactorX = nextScaleX / diagScaleX;
+
+        diagOffsetX = mouseX - (mouseX - diagOffsetX) * actualFactorX;
+        diagOffsetY = mouseY - (mouseY - diagOffsetY) * actualFactorX;
+        
+        diagScaleX = nextScaleX;
+        diagScaleY = Math.max(0.1, Math.min(initialScaleY * factor, 10.0));
+
+        renderDiagram();
+    }
+}, { passive: false });
+
+// スマホ用タッチ終了
+dCanvas.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) {
+        initialPinchDistance = null;
+    }
+    if (e.touches.length === 0) {
+        isDiagDragging = false;
+    } else if (e.touches.length === 1) {
+        // 2本指から1本指になったらドラッグを再開
+        isDiagDragging = true;
+        diagDragStartX = e.touches[0].clientX;
+        diagDragStartY = e.touches[0].clientY;
     }
 });
 
