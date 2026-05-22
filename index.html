@@ -1701,7 +1701,7 @@ function parseOuDia(text) {
         
         if(line === 'Ressya.') { 
             blockStack.push('Ressya'); 
-            curT = { sdMap: {}, number: '-', yukisaki: '', houkou: currentDirection, syubetsuIdx: 0, carNumber: '', tempTrackMap: {} }; // carNumber, tempTrackMap追加
+            curT = { sdMap: {}, number: '-', yukisaki: '', houkou: currentDirection, syubetsuIdx: 0, carNumber: '', tempTrackMap: {}, checkedMap: {} }; // checkedMap追加
             trains.push(curT);
             continue; 
         }
@@ -1782,9 +1782,6 @@ function parseOuDia(text) {
         }
         t.terminal = terminalName || '不明';
     });
-
-    // 1駅だけのデータ（幽霊列車）も表示するため、以下の除外処理を無効化
-    // trains = trains.filter(t => Object.keys(t.sdMap).length >= 2);
 
     return { stations, trains, syubetsuList, kudariAlias, noboriAlias };
 }
@@ -1935,15 +1932,6 @@ function renderTable(direction, bodyId, countId) {
             tr.classList.add('row-modified');
         }
 
-        tr.onclick = function(e) {
-            // テキストボックスやセレクトボックスのクリック時は行のチェック処理を発動させない
-            if (e.target.tagName.toLowerCase() !== 'input' && e.target.tagName.toLowerCase() !== 'select') {
-                const cb = this.querySelector('input[type="checkbox"]');
-                cb.checked = !cb.checked;
-                this.classList.toggle('row-checked', cb.checked);
-            }
-        };
-
         // 車号セルの生成
         let carNumCell = '';
         if (direction === 'Nobori') {
@@ -1983,13 +1971,45 @@ function renderTable(direction, bodyId, countId) {
             trackCell = `<td class="${trackClass}">${ev.track || '-'}</td>`;
         }
 
-        tr.innerHTML = `<td><input type="checkbox" onchange="this.closest('tr').classList.toggle('row-checked', this.checked)"></td>
+        // ※ここでHTMLとして描画する際、文字列として「checked」を付与するのではなく、
+        // 描画した後に JavaScript の DOM プロパティとして明示的に「checked = true」を設定する形に改修
+        tr.innerHTML = `<td><input type="checkbox" class="row-checkbox"></td>
                         ${carNumCell}
                         <td class="font-bold text-slate-800 text-base">${ev.time}</td>
                         <td class="text-slate-500 font-medium">${ev.number}</td>
                         <td class="font-bold text-xs" style="color: ${ev.syubetsuColor};">${ev.syubetsuName}</td>
                         <td class="text-slate-700 font-bold">${ev.terminal}</td>
                         ${trackCell}`;
+
+        const checkbox = tr.querySelector('.row-checkbox');
+        
+        // 【修正点】プロパティとして確実にチェック状態を復元させる
+        const isChecked = ev.trainRef.checkedMap && ev.trainRef.checkedMap[idx];
+        checkbox.checked = !!isChecked; 
+        if (isChecked) {
+            tr.classList.add('row-checked');
+        }
+
+        // チェックボックス直接操作時の状態保存
+        checkbox.addEventListener('change', function(e) {
+            tr.classList.toggle('row-checked', this.checked);
+            ev.trainRef.checkedMap = ev.trainRef.checkedMap || {};
+            ev.trainRef.checkedMap[idx] = this.checked;
+        });
+
+        // 行全体をクリックしたときの状態保存
+        tr.onclick = function(e) {
+            // テキストボックスやセレクトボックスのクリック時は行のチェック処理を発動させない
+            if (e.target.tagName.toLowerCase() !== 'input' && e.target.tagName.toLowerCase() !== 'select') {
+                checkbox.checked = !checkbox.checked;
+                this.classList.toggle('row-checked', checkbox.checked);
+                
+                // チェック状態をデータに保存
+                ev.trainRef.checkedMap = ev.trainRef.checkedMap || {};
+                ev.trainRef.checkedMap[idx] = checkbox.checked;
+            }
+        };
+
         body.appendChild(tr);
     });
 
